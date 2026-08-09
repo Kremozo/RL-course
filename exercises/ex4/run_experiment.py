@@ -23,7 +23,7 @@ def _align_belief_with_first_observation(belief: BeliefFilter, board: Board,
 
 
 def run_single_episode(settings: Settings, time_budget: float, seed: int,
-                        verbose: bool = False) -> int:
+                        verbose: bool = False) -> Tuple[int, bool]:
     rng = random.Random(seed)
     board = Board(settings.layout)
     dynamics = Dynamics(board, settings)
@@ -37,28 +37,31 @@ def run_single_episode(settings: Settings, time_budget: float, seed: int,
     _align_belief_with_first_observation(belief, board, obs, small, heavy, settings, rng)
 
     steps = 0
-    done = False
-    while not done and steps < settings.max_steps_per_episode:
+    terminated = False
+    truncated = False
+    deadlocked = False
+    while not (terminated or truncated or deadlocked) and steps < settings.max_steps_per_episode:
         action = planner.decide(belief.particles, small, heavy, time_budget)
         obs, reward, terminated, truncated, info = sim.step(action)
         belief.update(action, obs, small, heavy, info["small"], info["heavy"])
         small, heavy = info["small"], info["heavy"]
         steps += 1
-        done = terminated or truncated
+        deadlocked = (not terminated) and dynamics.is_deadlocked(sim.true_state)
         if verbose:
             print(f"    step {steps:>3}  action={action:<2} "
                   f"sims={planner.last_sim_count:<6} "
                   f"belief_support={len(set(belief.particles))}")
-    return steps
+    success = terminated and not deadlocked
+    return steps, success
 
 
 def _episodes_for_setting(settings: Settings, budget: float, verbose: bool
-                           ) -> Iterator[Tuple[int, int, float]]:
+                           ) -> Iterator[Tuple[int, int, bool, float]]:
     for run in range(settings.episodes_per_setting):
         t0 = time.perf_counter()
-        steps = run_single_episode(settings, budget, seed=settings.seed + run,
-                                    verbose=(verbose and run == 0))
-        yield run, steps, time.perf_counter() - t0
+        steps, success = run_single_episode(settings, budget, seed=settings.seed + run,
+                                             verbose=(verbose and run == 0))
+        yield run, steps, success, time.perf_counter() - t0
 
 
 def run_benchmark(base_settings: Settings, scenarios: Optional[List[str]] = None,
@@ -78,20 +81,34 @@ def run_benchmark(base_settings: Settings, scenarios: Optional[List[str]] = None
         emit(f"\n=== scenario={scenario}  budget={budget}s  "
              f"({settings.episodes_per_setting} runs) ===")
         step_counts = []
-        for run, steps, dt in _episodes_for_setting(settings, budget, verbose_first):
+        successes = []
+        for run, steps, success, dt in _episodes_for_setting(settings, budget, verbose_first):
             step_counts.append(steps)
+            successes.append(success)
             emit(f"  run {run + 1:>2}/{settings.episodes_per_setting}: "
-                 f"steps={steps:<4} ({dt:.1f}s)")
+                 f"steps={steps:<4} success={'yes' if success else 'no ':<3} ({dt:.1f}s)")
         arr = np.array(step_counts, dtype=float)
-        results[(scenario, budget)] = (arr.mean(), arr.std())
-        emit(f"  --> mean={arr.mean():.2f}  std={arr.std():.2f}")
+        succ_arr = np.array(successes, dtype=bool)
+        success_rate = succ_arr.mean() if len(succ_arr) else 0.0
+        if succ_arr.any():
+            solved_steps = arr[succ_arr]
+            mean_solved, std_solved = solved_steps.mean(), solved_steps.std()
+        else:
+            mean_solved, std_solved = float("nan"), float("nan")
+        results[(scenario, budget)] = (arr.mean(), arr.std(), success_rate,
+                                        mean_solved, std_solved)
+        emit(f"  --> mean_steps(all)={arr.mean():.2f}  std(all)={arr.std():.2f}  "
+             f"success_rate={success_rate:.0%}  "
+             f"mean_steps(solved only)={mean_solved:.2f}  std(solved only)={std_solved:.2f}")
 
-    emit("\n" + "=" * 62)
-    emit(f"{'scenario':<12} {'budget':>8} {'mean steps':>12} {'std':>10}")
-    emit("-" * 62)
-    for (scenario, budget), (mean, std) in results.items():
-        emit(f"{scenario:<12} {budget:>7}s {mean:>12.2f} {std:>10.2f}")
-    emit("=" * 62)
+    emit("\n" + "=" * 90)
+    emit(f"{'scenario':<12} {'budget':>8} {'mean(all)':>10} {'std(all)':>9} "
+         f"{'success%':>9} {'mean(solved)':>13} {'std(solved)':>12}")
+    emit("-" * 90)
+    for (scenario, budget), (mean, std, succ, mean_s, std_s) in results.items():
+        emit(f"{scenario:<12} {budget:>7}s {mean:>10.2f} {std:>9.2f} "
+             f"{succ:>8.0%} {mean_s:>13.2f} {std_s:>12.2f}")
+    emit("=" * 90)
 
     if results_path:
         with open(results_path, "w") as f:
