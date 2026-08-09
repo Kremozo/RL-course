@@ -22,21 +22,21 @@ class State(NamedTuple):
 
 TWO_ROBOT_LAYOUT: List[str] = [
     "WWWWWWWW",
-    "WA  A  W",
-    "W   C  W",
-    "W B    W",
+    "W A  A W",
     "W      W",
-    "W G G  W",
+    "W   B  W",
+    "W      W",
+    "W   G  W",
     "WWWWWWWW",
 ]
 
 ONE_ROBOT_LAYOUT: List[str] = [
     "WWWWWWWW",
-    "W    A W",
+    "W   A  W",
     "W      W",
-    "W  B   W",
+    "W   B  W",
     "W      W",
-    "W G    W",
+    "W   G  W",
     "WWWWWWWW",
 ]
 
@@ -69,7 +69,7 @@ class Settings:
     max_steps_per_episode: int = 200
     belief_size: int = 500
     resample_attempts_cap: int = 20_000
-    exploration_const: float = 3.0
+    exploration_const: float = 1.0
     horizon: int = 50
     value_epsilon: float = 0.01
     discount: float = 0.95
